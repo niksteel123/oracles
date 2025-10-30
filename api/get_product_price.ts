@@ -1,4 +1,5 @@
 import { getProductById } from '../lib/products';
+import { fetchSteamPrice } from '../lib/steam';
 import { ProductPrice, ErrorResponse } from '../types/mcp';
 
 export const config = { runtime: 'edge' };
@@ -70,34 +71,28 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   try {
-    // Generate placeholder price data for demo purposes
-    // TODO: Integrate with a price source that works from Vercel (CSFloat blocks, Apify needs custom actor)
-    
-    // Use productId to generate a consistent price for demo
-    const hash = productId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const basePrice = 100 + (hash % 5000); // Range: $100-$5100
-    const priceVariance = 0.85 + (hash % 30) / 100; // 85%-115% variance
-    
-    const price = Math.round(basePrice * priceVariance * 100) / 100;
+    // Fetch real price from Steam Community Market
+    const priceData = await fetchSteamPrice(productId);
 
     // Build response with required fields
     const response: ProductPrice = {
       productId,
-      price,
+      price: priceData.price,
       unit: 'USD',
       timestamp: new Date().toISOString(),
       schemaVersion: '1.0',
-      name: product.name,
-      variant: product.variant,
+      name: priceData.name || product.name,
+      variant: priceData.wear || product.variant,
       source: {
-        provider: 'Demo',
-        method: 'manual',
-        sampleSize: 1
+        provider: 'Steam Community Market',
+        marketplace: 'Steam Market',
+        method: 'api',
+        sampleSize: priceData.listingCount || 1
       },
       attributes: [
         {
           trait_type: 'Condition',
-          value: product.variant || 'Unknown',
+          value: priceData.wear || product.variant || 'Unknown',
           display_type: 'string'
         }
       ]

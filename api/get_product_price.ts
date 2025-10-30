@@ -1,5 +1,5 @@
 import { getProductById } from '../lib/products';
-import { fetchBuff163Price } from '../lib/buff163';
+import { fetchSteamDTPrice } from '../lib/steamdt';
 import { ProductPrice, ErrorResponse } from '../types/mcp';
 
 export const config = { runtime: 'edge' };
@@ -71,8 +71,8 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   try {
-    // Fetch real price from Buff163 via Apify scraping
-    const priceData = await fetchBuff163Price(productId);
+    // Fetch real price from SteamDT API (no auth required)
+    const priceData = await fetchSteamDTPrice(productId);
 
     // Build response with required fields
     const response: ProductPrice = {
@@ -85,9 +85,9 @@ export default async function handler(req: Request): Promise<Response> {
       variant: priceData.wear || product.variant,
       imageUrl: priceData.image,
       source: {
-        provider: 'Buff163',
-        marketplace: 'Buff163',
-        method: 'scrape',
+        provider: 'SteamDT',
+        marketplace: 'SteamDT Market',
+        method: 'api',
         sampleSize: priceData.listingCount || 1
       },
       attributes: [

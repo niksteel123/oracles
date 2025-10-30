@@ -2,17 +2,15 @@ import { productIdToSearchTerm, extractWearFromProductId } from './utils';
 import { getProductById } from './products';
 
 export interface CSGOFloatListing {
-  name: string;
-  wear?: string;
-  price: number;
-  currency: string;
-  image?: string;
-  float_value?: number;
-  pattern_index?: number;
-}
-
-export interface CSGOFloatResponse {
-  items: CSGOFloatListing[];
+  item: {
+    market_hash_name: string;
+    wear_name: string;
+    icon_url?: string;
+    float_value?: number;
+    paint_seed?: number;
+  };
+  price: number; // Price in cents
+  id: string;
 }
 
 export interface PriceData {
@@ -26,7 +24,7 @@ export interface PriceData {
 }
 
 /**
- * Fetch price from CSGOFloat API
+ * Fetch price from CSFloat API
  */
 export async function fetchCSGOFloatPrice(productId: string): Promise<PriceData> {
   const apiKey = process.env.CSGOFLOAT_API_KEY;
@@ -43,54 +41,58 @@ export async function fetchCSGOFloatPrice(productId: string): Promise<PriceData>
   const searchTerm = productIdToSearchTerm(productId);
   const wearCondition = extractWearFromProductId(productId);
 
-  // Build API URL
-  const url = new URL('https://csgofloat.com/api/v1/listings');
-  url.searchParams.set('name', searchTerm);
-  url.searchParams.set('limit', '20'); // Get more listings for better median
+  // Build API URL - CSFloat API uses csfloat.com (not csgofloat.com)
+  const url = new URL('https://csfloat.com/api/v1/listings');
+  url.searchParams.set('market_hash_name', searchTerm);
+  url.searchParams.set('limit', '50'); // Max is 50
 
   const response = await fetch(url.toString(), {
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
+      'Authorization': apiKey, // CSFloat uses API key directly, not Bearer token
       'Content-Type': 'application/json'
     }
   });
 
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error('CSGOFloat API authentication failed. Check your API key.');
+      throw new Error('CSFloat API authentication failed. Check your API key.');
+    }
+    if (response.status === 403) {
+      throw new Error('CSFloat API access forbidden. Check your API key permissions.');
     }
     if (response.status === 429) {
-      throw new Error('CSGOFloat API rate limit exceeded.');
+      throw new Error('CSFloat API rate limit exceeded.');
     }
-    throw new Error(`CSGOFloat API error: ${response.status} ${response.statusText}`);
+    throw new Error(`CSFloat API error: ${response.status} ${response.statusText}`);
   }
 
-  const data = await response.json() as CSGOFloatResponse;
+  // CSFloat API returns array directly
+  const data = await response.json() as CSGOFloatListing[];
 
-  if (!data.items || data.items.length === 0) {
+  if (!data || data.length === 0) {
     throw new Error(`No listings found for: ${searchTerm}`);
   }
 
   // Filter by wear condition if specified
-  let filteredItems = data.items;
+  let filteredItems = data;
   if (wearCondition) {
-    filteredItems = data.items.filter(item => {
-      if (!item.wear) return false;
-      const normalized = item.wear.toLowerCase();
-      return normalized.includes(wearCondition.toLowerCase().replace('-', ' '));
+    filteredItems = data.filter((listing: CSGOFloatListing) => {
+      const listingWear = listing.item.wear_name?.toLowerCase() || '';
+      const targetWear = wearCondition.toLowerCase().replace('-', ' ');
+      return listingWear.includes(targetWear) || targetWear.includes(listingWear);
     });
 
     // If no exact wear match, use all items but note it
     if (filteredItems.length === 0) {
-      filteredItems = data.items;
+      filteredItems = data;
     }
   }
 
-  // Calculate median price
+  // Calculate median price (CSFloat returns price in cents, convert to dollars)
   const prices = filteredItems
-    .map(item => item.price)
-    .filter(p => p > 0)
-    .sort((a, b) => a - b);
+    .map((item: CSGOFloatListing) => item.price / 100) // Convert cents to dollars
+    .filter((p: number) => p > 0)
+    .sort((a: number, b: number) => a - b);
 
   if (prices.length === 0) {
     throw new Error('No valid prices found');
@@ -102,18 +104,17 @@ export async function fetchCSGOFloatPrice(productId: string): Promise<PriceData>
     : prices[medianIndex];
 
   // Get representative item (one with median price or closest)
-  const representativeItem = filteredItems.find(item => 
-    Math.abs(item.price - medianPrice) < 0.01
+  const representativeItem = filteredItems.find((item: CSGOFloatListing) => 
+    Math.abs((item.price / 100) - medianPrice) < 0.01
   ) || filteredItems[Math.floor(filteredItems.length / 2)];
 
   return {
     price: medianPrice,
-    name: representativeItem.name || product.name,
-    wear: representativeItem.wear || wearCondition || 'Unknown',
-    image: representativeItem.image,
-    float: representativeItem.float_value,
-    pattern: representativeItem.pattern_index,
+    name: representativeItem.item.market_hash_name || product.name,
+    wear: representativeItem.item.wear_name || wearCondition || 'Unknown',
+    image: representativeItem.item.icon_url ? `https://steamcommunity-a.akamaihd.net/economy/image/${representativeItem.item.icon_url}` : undefined,
+    float: representativeItem.item.float_value,
+    pattern: representativeItem.item.paint_seed,
     listingCount: filteredItems.length
   };
 }
-

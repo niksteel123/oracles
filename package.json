@@ -1,0 +1,26 @@
+{
+  "name": "cs2-skins-mcp",
+  "version": "1.0.0",
+  "description": "CS2 Skins MCP - Price oracle for Nerve prediction markets",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc",
+    "deploy": "vercel deploy --prod"
+  },
+  "keywords": [
+    "mcp",
+    "cs2",
+    "oracle",
+    "vercel",
+    "edge-functions"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0",
+    "vercel": "^32.5.0"
+  }
+}
+

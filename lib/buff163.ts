@@ -27,14 +27,13 @@ export async function fetchBuff163Price(productId: string): Promise<PriceData> {
 
   const searchTerm = productIdToSearchTerm(productId);
 
-  // Buff163 search API endpoint
-  // Use Apify's Web Scraper to fetch from Buff163
-  const buffUrl = `https://buff.163.com/api/market/goods?game=csgo&page_num=1&search=${encodeURIComponent(searchTerm)}&use_suggestion=0&_=`;
+  // Buff163 public search page
+  const buffUrl = `https://buff.163.com/goods/market/search?game=csgo&search=${encodeURIComponent(searchTerm)}`;
   
   try {
-    // Use Apify's web scraper actor to fetch Buff163 data
-    const response = await fetch(
-      'https://api.apify.com/v2/acts/apify~web-scraper/runs/sync',
+    // Start Apify actor run
+    const runResponse = await fetch(
+      `https://api.apify.com/v2/acts/apify~web-scraper/runs`,
       {
         method: 'POST',
         headers: {
@@ -43,46 +42,124 @@ export async function fetchBuff163Price(productId: string): Promise<PriceData> {
         },
         body: JSON.stringify({
           startUrls: [{ url: buffUrl }],
-          waitFor: 2000,
+          waitFor: 3000,
           pageFunction: `
             async function pageFunction(context) {
-              const { page, request } = context;
-              await page.waitForSelector('pre', { timeout: 5000 });
-              const jsonText = await page.$eval('pre', el => el.textContent);
-              return JSON.parse(jsonText);
+              const { page } = context;
+              
+              // Wait for page to load
+              await page.waitForTimeout(3000);
+              
+              // Extract prices from Buff163 page
+              const items = await page.evaluate(() => {
+                const results = [];
+                
+                // Buff163 uses data attributes and specific classes
+                const rows = Array.from(document.querySelectorAll('tr[data-good-id], .market-list-item, [data-good-id]'));
+                
+                rows.forEach(row => {
+                  try {
+                    const nameEl = row.querySelector('a[href*="/goods/"], .name, [class*="name"]');
+                    const priceEl = row.querySelector('.price, [class*="price"], .sell_price, [data-price]');
+                    
+                    if (nameEl && priceEl) {
+                      const name = nameEl.textContent?.trim() || '';
+                      const priceText = priceEl.textContent?.trim() || '';
+                      
+                      // Extract price number (CNY format like "¥1,234.56" or "1234.56")
+                      const priceMatch = priceText.match(/[\\d,]+(?:\\.[\\d]+)?/) || priceText.match(/\\d+/);
+                      
+                      if (priceMatch && name) {
+                        const priceCNY = parseFloat(priceMatch[0].replace(/,/g, ''));
+                        if (priceCNY > 0) {
+                          results.push({
+                            name: name,
+                            priceCNY: priceCNY,
+                            priceText: priceText
+                          });
+                        }
+                      }
+                    }
+                  } catch (e) {
+                    // Skip invalid rows
+                  }
+                });
+                
+                return results;
+              });
+              
+              return items;
             }
           `
         })
       }
     );
 
-    if (!response.ok) {
-      throw new Error(`Apify API error: ${response.status} ${response.statusText}`);
+    if (!runResponse.ok) {
+      const errorText = await runResponse.text();
+      throw new Error(`Apify actor start failed: ${runResponse.status} - ${errorText}`);
     }
 
-    const result = await response.json() as any;
-    
-    // Parse Buff163 API response
-    // Buff163 returns: { code: "OK", data: { items: [...], total_count: ... } }
-    const data = result.data?.dataset?.items?.[0]?.data || result;
-    
-    if (!data || (data.code && data.code !== 'OK')) {
-      throw new Error(`Buff163 API returned error: ${data?.code || 'Unknown'}`);
+    const runData = await runResponse.json() as any;
+    const runId = runData.data?.id;
+
+    if (!runId) {
+      throw new Error('Failed to get Apify run ID');
     }
 
-    const items = data.data?.items || [];
-    
-    if (!items || items.length === 0) {
-      throw new Error(`No listings found for: ${searchTerm}`);
+    // Wait for run to complete and get dataset
+    let attempts = 0;
+    let datasetItems: any[] = [];
+
+    while (attempts < 30) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const statusResponse = await fetch(
+        `https://api.apify.com/v2/actor-runs/${runId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${apifyToken}`
+          }
+        }
+      );
+
+      const status = await statusResponse.json() as any;
+      
+      if (status.data?.status === 'SUCCEEDED') {
+        // Get dataset items
+        const datasetResponse = await fetch(
+          `https://api.apify.com/v2/datasets/${status.data.defaultDatasetId}/items`,
+          {
+            headers: {
+              'Authorization': `Bearer ${apifyToken}`
+            }
+          }
+        );
+        
+        const dataset = await datasetResponse.json() as any;
+        datasetItems = dataset.items || dataset.data?.items || [];
+        break;
+      } else if (status.data?.status === 'FAILED' || status.data?.status === 'ABORTED') {
+        throw new Error(`Apify run failed: ${status.data.status}`);
+      }
+      
+      attempts++;
     }
 
-    // Extract prices from Buff163 response
-    const prices = items
-      .map((item: any) => {
-        // Buff163 price is in CNY, convert to USD (rough conversion)
-        const priceCNY = parseFloat(item.price || item.sell_min_price || '0');
-        const priceUSD = priceCNY / 7.2; // Approximate CNY to USD conversion
-        return priceUSD;
+    if (datasetItems.length === 0) {
+      throw new Error(`No items found in Apify dataset for: ${searchTerm}`);
+    }
+
+    // Extract and convert prices
+    const prices = datasetItems
+      .flatMap((item: any) => {
+        const items = item.items || (Array.isArray(item) ? item : [item]);
+        return items.map((i: any) => {
+          const priceCNY = i.priceCNY || parseFloat(i.priceText?.replace(/[^0-9.]/g, '') || '0');
+          // Convert CNY to USD (rate ~7.1)
+          const priceUSD = priceCNY / 7.1;
+          return priceUSD;
+        });
       })
       .filter((p: number) => p > 0 && !isNaN(p))
       .sort((a: number, b: number) => a - b);
@@ -96,18 +173,16 @@ export async function fetchBuff163Price(productId: string): Promise<PriceData> {
       ? (prices[medianIndex - 1] + prices[medianIndex]) / 2
       : prices[medianIndex];
 
-    const firstItem = items[0];
+    const firstItem = datasetItems[0]?.items?.[0] || datasetItems[0] || {};
 
     return {
       price: Math.round(medianPrice * 100) / 100,
-      name: firstItem.market_hash_name || firstItem.name || product.name,
-      wear: firstItem.tags?.exterior?.localized_name || product.variant || 'Unknown',
-      image: firstItem.goods_info?.icon_url || firstItem.icon_url,
-      listingCount: items.length
+      name: firstItem.name || product.name,
+      wear: product.variant || 'Unknown',
+      listingCount: prices.length
     };
 
   } catch (error) {
     throw new Error(`Buff163 scraping failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
-

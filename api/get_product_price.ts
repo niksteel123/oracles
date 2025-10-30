@@ -1,5 +1,3 @@
-import { fetchCSGOFloatPrice } from '../lib/csgofloat';
-import { fetchApifyPrice } from '../lib/apify';
 import { getProductById } from '../lib/products';
 import { ProductPrice, ErrorResponse } from '../types/mcp';
 
@@ -72,81 +70,38 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   try {
-    // Try CSGOFloat first, fall back to Apify
-    let priceData;
-    let sourceMethod: 'api' | 'scrape' = 'api';
-    let provider = 'CSGOFloat';
-
-    try {
-      priceData = await fetchCSGOFloatPrice(productId);
-      provider = 'CSGOFloat';
-      sourceMethod = 'api';
-    } catch (csgoError) {
-      // Fall back to Apify
-      console.warn(`CSGOFloat failed for ${productId}, trying Apify:`, csgoError);
-      try {
-        priceData = await fetchApifyPrice(productId);
-        provider = 'Apify';
-        sourceMethod = 'scrape';
-      } catch (apifyError) {
-        // Both failed
-        throw new Error(
-          `Both price sources failed. CSGOFloat: ${csgoError instanceof Error ? csgoError.message : String(csgoError)}. Apify: ${apifyError instanceof Error ? apifyError.message : String(apifyError)}`
-        );
-      }
-    }
-
-    // Validate price
-    if (!priceData.price || priceData.price <= 0) {
-      throw new Error('Invalid price returned from source');
-    }
+    // Generate placeholder price data for demo purposes
+    // TODO: Integrate with a price source that works from Vercel (CSFloat blocks, Apify needs custom actor)
+    
+    // Use productId to generate a consistent price for demo
+    const hash = productId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const basePrice = 100 + (hash % 5000); // Range: $100-$5100
+    const priceVariance = 0.85 + (hash % 30) / 100; // 85%-115% variance
+    
+    const price = Math.round(basePrice * priceVariance * 100) / 100;
 
     // Build response with required fields
     const response: ProductPrice = {
       productId,
-      price: priceData.price,
+      price,
       unit: 'USD',
       timestamp: new Date().toISOString(),
       schemaVersion: '1.0',
-      name: priceData.name || product.name,
-      variant: priceData.wear || product.variant,
-      imageUrl: priceData.image || product.imageUrl,
+      name: product.name,
+      variant: product.variant,
       source: {
-        provider,
-        marketplace: provider === 'CSGOFloat' ? 'CSGOFloat Market' : 'Buff163 (via Apify)',
-        method: sourceMethod,
-        sampleSize: priceData.listingCount
-      }
-    };
-
-    // Add attributes if available
-    if (priceData.float !== undefined || priceData.pattern !== undefined) {
-      response.attributes = [];
-      
-      if (priceData.wear) {
-        response.attributes.push({
+        provider: 'Demo',
+        method: 'demo',
+        sampleSize: 1
+      },
+      attributes: [
+        {
           trait_type: 'Condition',
-          value: priceData.wear,
+          value: product.variant || 'Unknown',
           display_type: 'string'
-        });
-      }
-
-      if (priceData.float !== undefined) {
-        response.attributes.push({
-          trait_type: 'Float',
-          value: priceData.float,
-          display_type: 'number'
-        });
-      }
-
-      if (priceData.pattern !== undefined) {
-        response.attributes.push({
-          trait_type: 'Pattern',
-          value: priceData.pattern,
-          display_type: 'number'
-        });
-      }
-    }
+        }
+      ]
+    };
 
     return new Response(JSON.stringify(response), {
       status: 200,
